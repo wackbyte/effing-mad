@@ -11,41 +11,46 @@
 
 #![feature(generators)]
 #![feature(generator_trait)]
+#![feature(never_type)]
 
-use effing_mad::{effectful, handle, handler, Effect, perform, lift};
+use {
+    effing_mad::{effectful, handle_group, handler, lift, perform, Effect},
+    std::ops::ControlFlow,
+};
 
 fn main() {
-    let cancelled = handle(combined(), handler!(Cancel => break));
-    let logged = handle(cancelled, handler!(Log(msg) => println!("log: {msg}")));
-    let filesystemed = handle(
-        logged,
-        handler!(FileRead(name) => {
-            assert_eq!(name, "~/my passwords.txt");
-            "monadtransformerssuck".into()
-        }),
+    let handled = handle_group(
+        combined(),
+        handler! {
+            Cancel: Cancel => return ControlFlow::Break(()),
+            Log(msg): Log => println!("log: {msg}"),
+            FileRead(name): FileRead => {
+                assert_eq!(name, "~/my passwords.txt");
+                "monadtransformerssuck".into()
+            },
+        },
     );
 
-    effing_mad::run(filesystemed);
+    effing_mad::run(handled);
 }
 
 struct Cancel;
 
 impl Effect for Cancel {
-    /// Resuming an effectful function after it has cancelled is impossible.
-    type Injection = effing_mad::Never;
+    type Injection = !;
 }
 
+/// The logging handler does not provide any information back to the effectful function.
 struct Log<'a>(std::borrow::Cow<'a, str>);
 
 impl<'a> Effect for Log<'a> {
-    /// The logging handler does not provide any information back to the effectful function.
     type Injection = ();
 }
 
+/// For this example, we pretend files are just strings, and the whole file is read at once.
 struct FileRead(String);
 
 impl Effect for FileRead {
-    /// For this example, we pretend files are just strings, and the whole file is read at once.
     type Injection = String;
 }
 
@@ -55,13 +60,15 @@ impl Effect for FileRead {
 // Allow unreachable code because the compiler knows that after cancelling, there is no more
 // execution, so this function would otherwise cause a warning. However, this warning only comes up
 // if there is a `yield` after cancelling, not if there are only normal statements and expressions.
-#[allow(unreachable_code)]
 #[effectful(Cancel, Log<'a>)]
 fn simple<'a>() {
     perform!(Log("starting...".into()));
     perform!(Log("something went wrong! aah!".into()));
     perform!(Cancel);
-    perform!(Log("no, sorry. i have gone home.".into()));
+    #[allow(unreachable_code)]
+    {
+        perform!(Log("no, sorry. i have gone home.".into()));
+    }
 }
 
 // This function demonstrates how effect handlers can pass values back into the effectful function,
@@ -74,6 +81,8 @@ fn combined<'a>() {
     // ...for some reason. I sure hope that doesn't foil my plans to take over Rust with algebraic
     // effects.
     perform!(Log(format!("I know your password! It's {mischief}").into()));
-    perform!(Log("I'm going to do evil things and you can't stop me!".into()));
+    perform!(Log(
+        "I'm going to do evil things and you can't stop me!".into()
+    ));
     lift!(simple());
 }

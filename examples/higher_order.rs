@@ -4,20 +4,29 @@
 
 #![feature(generators)]
 #![feature(generator_trait)]
+#![feature(never_type)]
 
-use effing_mad::{effectful, handle, handler, higher_order::OptionExt, run, Effect, Never, perform, lift};
+use {
+    effing_mad::{
+        effectful, handle_group, handler, higher_order::OptionExt, lift, perform, run, Effect,
+    },
+    std::ops::ControlFlow,
+};
 
 fn main() {
-    let handler = handler!(Fail(msg) => {
-        println!("Error: {msg}");
-        break;
-    });
-    run(handle(precarious(), handler));
+    let handler = handler! {
+        Fail(msg): Fail => {
+            println!("Error: {msg}");
+            return ControlFlow::Break(());
+        }
+    };
+    run(handle_group(precarious(), handler));
 }
 
 struct Fail(&'static str);
+
 impl Effect for Fail {
-    type Injection = Never;
+    type Injection = !;
 }
 
 #[effectful(Fail)]
@@ -34,7 +43,6 @@ fn precarious() {
 fn add_5(n: i32) -> i32 {
     if n == 45 {
         perform!(Fail("I'm scared of 45 :("));
-        unreachable!()
     } else {
         n + 5
     }

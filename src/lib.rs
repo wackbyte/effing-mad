@@ -28,14 +28,15 @@
 #![feature(doc_notable_trait)]
 #![feature(generators)]
 #![feature(generator_trait)]
+#![feature(never_type)]
 #![feature(return_position_impl_trait_in_trait)]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![warn(missing_docs)]
 
 extern crate alloc;
 
+pub use effing_macros::{effectful, handler};
 pub use frunk;
-pub use effing_macros::{effectful, effects, handler};
 
 pub mod effects;
 pub mod higher_order;
@@ -44,6 +45,7 @@ pub mod injection;
 #[doc(hidden)]
 pub mod macro_impl;
 
+use self::injection::{Begin, EffectList, Tagged};
 use core::{
     future::Future,
     ops::{ControlFlow, Generator, GeneratorState},
@@ -53,12 +55,6 @@ use frunk::{
     coproduct::{CNil, CoprodInjector, CoprodUninjector, CoproductEmbedder, CoproductSubsetter},
     Coprod, Coproduct,
 };
-use self::injection::{Begin, EffectList, Tagged};
-
-/// An uninhabited type that can never be constructed.
-///
-/// Substitutes for `!` until that is stabilised.
-pub enum Never {}
 
 /// An effect that must be handled by the caller of an effectful computation, or propagated up the
 /// call stack.
@@ -78,7 +74,10 @@ pub trait EffectGroup {
     type Effects: EffectList;
 }
 
-impl<E: Effect> EffectGroup for E {
+impl<E> EffectGroup for E
+where
+    E: Effect,
+{
     type Effects = Coproduct<E, CNil>;
 }
 

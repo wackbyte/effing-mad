@@ -17,9 +17,14 @@ pub struct Begin;
 /// occurrences of the same type in a coproduct. If two effects' injections were both `i32`, it
 /// would be impossible to tell the injections apart without tagging them with the effect that they
 /// come from.
-pub struct Tagged<T, Tag>(T, PhantomData<Tag>);
+pub struct Tagged<T, Tag>(T, PhantomData<Tag>)
+where
+    Tag: ?Sized;
 
-impl<T, Tag> Tagged<T, Tag> {
+impl<T, Tag> Tagged<T, Tag>
+where
+    Tag: ?Sized,
+{
     /// Tag the value `v` with the type parameter `Tag`.
     pub fn new(v: T) -> Self {
         Tagged(v, PhantomData)
@@ -31,7 +36,18 @@ impl<T, Tag> Tagged<T, Tag> {
     }
 }
 
-impl<T: Clone, Tag> Clone for Tagged<T, Tag> {
+impl<T, Tag> Copy for Tagged<T, Tag>
+where
+    T: Copy,
+    Tag: ?Sized,
+{
+}
+
+impl<T, Tag> Clone for Tagged<T, Tag>
+where
+    T: Clone,
+    Tag: ?Sized,
+{
     fn clone(&self) -> Self {
         Tagged::new(self.0.clone())
     }
@@ -51,6 +67,10 @@ impl EffectList for CNil {
     type Injections = Coproduct<Begin, CNil>;
 }
 
-impl<E: Effect, Es: EffectList> EffectList for Coproduct<E, Es> {
+impl<E, Es> EffectList for Coproduct<E, Es>
+where
+    E: Effect,
+    Es: EffectList,
+{
     type Injections = Coproduct<Tagged<E::Injection, E>, Es::Injections>;
 }

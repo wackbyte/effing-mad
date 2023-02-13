@@ -2,8 +2,7 @@
 #![feature(generator_trait)]
 
 use core::ops::ControlFlow;
-
-use effing_mad::{effectful, handle, run, transform0, transform1, Effect};
+use effing_mad::{effectful, handle, perform, run, transform0, transform1, Effect};
 
 fn main() {
     let work = take_over_the_world();
@@ -38,20 +37,23 @@ impl Effect for Lunchtime {
 // I am running out of inspiration for the functions in these examples
 #[effectful(Log, Lunchtime)]
 fn take_over_the_world() {
-    yield Log("I intend to take over the world!".into(), 5);
-    yield Log("I'm off to get lunch first though".into(), 0);
-    yield Lunchtime;
-    yield Log("They're out of sausage rolls at the bakery!".into(), 100);
+    perform!(Log("I intend to take over the world!".into(), 5));
+    perform!(Log("I'm off to get lunch first though".into(), 0));
+    perform!(Lunchtime);
+    perform!(Log(
+        "They're out of sausage rolls at the bakery!".into(),
+        100
+    ));
 }
 
 #[effectful(Print)]
 fn print_log(Log(message, importance): Log) {
-    yield Print(format!("log (importance {importance}): {message}"));
+    perform!(Print(format!("log (importance {importance}): {message}")));
 }
 
 #[effectful(Print)]
 fn print_lunchtime(Lunchtime: Lunchtime) {
-    yield Print("lunchtime: in progress...".into());
+    perform!(Print("lunchtime: in progress...".into()));
     std::thread::sleep(std::time::Duration::from_secs(3));
-    yield Print("lunchtime: failed!".into());
+    perform!(Print("lunchtime: failed!".into()));
 }

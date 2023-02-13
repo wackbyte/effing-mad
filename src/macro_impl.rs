@@ -4,7 +4,7 @@ use crate::{
     injection::{EffectList, Tagged},
     Effect, EffectGroup,
 };
-use core::marker::PhantomData;
+use core::{marker::PhantomData, ops::ControlFlow};
 use frunk::{
     coproduct::{CNil, CoprodUninjector},
     Coproduct,

@@ -8,30 +8,44 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use effing_mad::{effectful, handle_group, handler, run, perform, lift};
+use core::marker::PhantomData;
+use effing_mad::{
+    effectful, frunk::Coprod, handle_group, handler, perform, run, Effect, EffectGroup,
+};
 
 fn main() {
     let mut state = 34;
-    let state_handler = handler!(State<i32> {
-        get() => state,
-        put(v) => state = v,
-    });
+    let state_handler = handler! {
+        Get(_): Get<_> => state,
+        Put(v): Put<_> => state = v,
+    };
     let handled = handle_group(use_state(), state_handler);
     run(handled);
     println!("final value: {}", state);
 }
 
-effing_mad::effects! {
-    State<T> {
-        fn get() -> T;
-        fn put(v: T) -> ();
-    }
+struct Get<T>(PhantomData<fn() -> T>);
+
+impl<T> Effect for Get<T> {
+    type Injection = T;
+}
+
+struct Put<T>(T);
+
+impl<T> Effect for Put<T> {
+    type Injection = ();
+}
+
+struct State<T>(PhantomData<T>);
+
+impl<T> EffectGroup for State<T> {
+    type Effects = Coprod!(Get<T>, Put<T>);
 }
 
 // Rust encourages immutability!
 #[effectful(State<i32>)]
 fn use_state() {
-    let initial = perform!(State::get());
+    let initial = perform!(Get(PhantomData));
     println!("initial value: {}", initial);
-    perform!(State::put(initial + 5));
+    perform!(Put(initial + 5));
 }

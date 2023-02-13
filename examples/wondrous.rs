@@ -1,11 +1,14 @@
-#![feature(generator_trait, generators)]
+#![feature(generator_trait, generators, never_type)]
 
-use effing_mad::{effectful, handle, handler, lift, perform, run, Effect};
+use {
+    effing_mad::{effectful, handle_group, handler, perform, run, Effect},
+    std::ops::ControlFlow,
+};
 
 struct Cancel;
 
 impl Effect for Cancel {
-    type Injection = effing_mad::Never;
+    type Injection = !;
 }
 
 #[effectful(Cancel)]
@@ -14,6 +17,11 @@ fn cancel() {
 }
 
 fn main() {
-    let handled = handle(cancel(), handler! { Cancel => break });
+    let handled = handle_group(
+        cancel(),
+        handler! {
+            Cancel: Cancel => return ControlFlow::Break(()),
+        },
+    );
     run(handled);
 }

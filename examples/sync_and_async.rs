@@ -1,7 +1,10 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use effing_mad::{effectful, handle_group, handle_group_async, handler, run};
+use effing_mad::{
+    effectful, frunk::Coprod, handle_group, handle_group_async, handler, perform, run, Effect,
+    EffectGroup,
+};
 
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -13,25 +16,28 @@ fn main() {
     boring_and_old_fashioned();
 }
 
-// very complex and powerful API
-effing_mad::effects! {
-    HttpRequest {
-        fn get(url: &'static str) -> String;
-    }
+struct HttpGet(&'static str);
+
+impl Effect for HttpGet {
+    type Injection = String;
+}
+
+struct HttpRequest;
+
+impl EffectGroup for HttpRequest {
+    type Effects = Coprod!(HttpGet);
 }
 
 // this function does not specify whether the request happens synchronously or asynchronously
-#[effectful(HttpRequest)]
+#[effectful(HttpGet)]
 fn example() -> usize {
-    let body = yield HttpRequest::get("http://example.com");
+    let body = perform!(HttpGet("http://example.com"));
     body.len()
 }
 
 async fn interesting_and_useful() {
-    let handler = handler! {
-        async HttpRequest {
-            get(url) => reqwest::get(url).await.unwrap().text().await.unwrap(),
-        }
+    let handler = handler! { async
+        HttpGet(url): HttpGet => reqwest::get(url).await.unwrap().text().await.unwrap(),
     };
 
     let req1 = handle_group_async(example(), handler);
@@ -44,9 +50,7 @@ async fn interesting_and_useful() {
 
 fn boring_and_old_fashioned() {
     let handler = handler! {
-        HttpRequest {
-            get(url) => reqwest::blocking::get(url).unwrap().text().unwrap(),
-        }
+        HttpGet(url): HttpGet => reqwest::blocking::get(url).unwrap().text().unwrap(),
     };
 
     let req = handle_group(example(), handler);

@@ -23,54 +23,42 @@
 //! [`handler!`](effing_macros::handler). Once all the effects have been handled away, a computation
 //! can be driven with [`run`].
 
+#![feature(async_fn_in_trait)]
 #![feature(doc_auto_cfg)]
 #![feature(doc_notable_trait)]
 #![feature(generators)]
 #![feature(generator_trait)]
+#![feature(return_position_impl_trait_in_trait)]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![warn(missing_docs)]
 
 extern crate alloc;
 
 pub use frunk;
+pub use effing_macros::{effectful, effects, handler};
 
 pub mod effects;
 pub mod higher_order;
 pub mod injection;
+
+#[doc(hidden)]
 pub mod macro_impl;
 
 use core::{
     future::Future,
     ops::{ControlFlow, Generator, GeneratorState},
-    pin::Pin,
+    pin::{pin, Pin},
 };
 use frunk::{
     coproduct::{CNil, CoprodInjector, CoprodUninjector, CoproductEmbedder, CoproductSubsetter},
     Coprod, Coproduct,
 };
-
-pub use effing_macros::{effectful, effects, handler};
-use injection::{Begin, EffectList, Tagged};
+use self::injection::{Begin, EffectList, Tagged};
 
 /// An uninhabited type that can never be constructed.
 ///
 /// Substitutes for `!` until that is stabilised.
 pub enum Never {}
-
-/// Run an effectful computation that has no effects.
-///
-/// Effectful computations are generators, but if they have no effects, it is guaranteed that they
-/// will never yield. Therefore they can be run by resuming them once. This function does that.
-pub fn run<F, R>(mut f: F) -> R
-where
-    F: Generator<Coproduct<Begin, CNil>, Yield = CNil, Return = R>,
-{
-    let pinned = core::pin::pin!(f);
-    match pinned.resume(Coproduct::Inl(Begin)) {
-        GeneratorState::Yielded(never) => match never {},
-        GeneratorState::Complete(ret) => ret,
-    }
-}
 
 /// An effect that must be handled by the caller of an effectful computation, or propagated up the
 /// call stack.
@@ -87,7 +75,7 @@ pub trait Effect {
 #[doc(notable_trait)]
 pub trait EffectGroup {
     /// A [`Coproduct`](frunk::coproduct::Coproduct) of effects in this group.
-    type Effects;
+    type Effects: EffectList;
 }
 
 impl<E: Effect> EffectGroup for E {
@@ -109,6 +97,21 @@ pub fn map<E, I, T, U>(
                 GeneratorState::Complete(ret) => return f(ret),
             }
         }
+    }
+}
+
+/// Run an effectful computation that has no effects.
+///
+/// Effectful computations are generators, but if they have no effects, it is guaranteed that they
+/// will never yield. Therefore they can be run by resuming them once. This function does that.
+pub fn run<G, R>(mut g: G) -> R
+where
+    G: Generator<Coproduct<Begin, CNil>, Yield = CNil, Return = R>,
+{
+    let pinned = pin!(g);
+    match pinned.resume(Coproduct::Inl(Begin)) {
+        GeneratorState::Yielded(never) => match never {},
+        GeneratorState::Complete(ret) => ret,
     }
 }
 

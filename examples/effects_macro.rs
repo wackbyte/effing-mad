@@ -8,7 +8,7 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use effing_mad::{effectful, handle_group, handler, run};
+use effing_mad::{effectful, handle_group, handler, run, perform, lift};
 
 fn main() {
     let mut state = 34;
@@ -31,7 +31,7 @@ effing_mad::effects! {
 // Rust encourages immutability!
 #[effectful(State<i32>)]
 fn use_state() {
-    let initial = yield State::get();
+    let initial = perform!(State::get());
     println!("initial value: {}", initial);
-    yield State::put(initial + 5);
+    perform!(State::put(initial + 5));
 }

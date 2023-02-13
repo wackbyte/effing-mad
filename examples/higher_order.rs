@@ -5,7 +5,7 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use effing_mad::{effectful, handle, handler, higher_order::OptionExt, run, Effect, Never};
+use effing_mad::{effectful, handle, handler, higher_order::OptionExt, run, Effect, Never, perform, lift};
 
 fn main() {
     let handler = handler!(Fail(msg) => {
@@ -22,18 +22,18 @@ impl Effect for Fail {
 
 #[effectful(Fail)]
 fn precarious() {
-    let null_plus_five = None.map_eff(add_5).do_;
+    let null_plus_five = lift!(None.map_eff(add_5));
     dbg!(null_plus_five);
-    let four_plus_five = Some(4).map_eff(add_5).do_;
+    let four_plus_five = lift!(Some(4).map_eff(add_5));
     dbg!(four_plus_five);
-    let forty_five_plus_five = Some(45).map_eff(add_5).do_;
+    let forty_five_plus_five = lift!(Some(45).map_eff(add_5));
     dbg!(forty_five_plus_five); // psst - unreachable!
 }
 
 #[effectful(Fail)]
 fn add_5(n: i32) -> i32 {
     if n == 45 {
-        yield Fail("I'm scared of 45 :(");
+        perform!(Fail("I'm scared of 45 :("));
         unreachable!()
     } else {
         n + 5

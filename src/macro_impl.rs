@@ -1,16 +1,51 @@
 //! Implementation details of the macros exported by `effing_mad`.
 
+use crate::{
+    injection::{EffectList, Tagged},
+    Effect, EffectGroup,
+};
 use core::marker::PhantomData;
-
 use frunk::{
     coproduct::{CNil, CoprodUninjector},
     Coproduct,
 };
 
-use crate::{
-    injection::{EffectList, Tagged},
-    Effect, EffectGroup,
-};
+#[macro_export]
+macro_rules! perform {
+    ($effect:expr $(,)?) => {{
+        let effect = $effect;
+        let marker = ::effing_mad::macro_impl::mark(&effect);
+        let injs = yield $crate::frunk::Coproduct::inject(effect);
+        $crate::macro_impl::get_inj(injs, marker).unwrap()
+    }};
+}
+
+#[macro_export]
+macro_rules! lift {
+    ($computation:expr $(,)?) => {{
+        let mut gen = $computation;
+        let mut injection = $crate::frunk::Coproduct::inject($crate::injection::Begin);
+        loop {
+            // interesting hack to trick the borrow checker
+            // allows cloneable generators
+            let res = {
+                // safety: same as in `handle_group`
+                let pinned = unsafe { ::core::pin::Pin::new_unchecked(&mut gen) };
+                ::core::ops::Generator::resume(pinned, injection)
+            };
+            match res {
+                ::core::ops::GeneratorState::Yielded(effs) => {
+                    injection = $crate::frunk::coproduct::CoproductSubsetter::subset(
+                        yield $crate::frunk::coproduct::CoproductEmbedder::embed(effs),
+                    )
+                    .ok()
+                    .unwrap();
+                },
+                ::core::ops::GeneratorState::Complete(v) => break v,
+            }
+        }
+    }};
+}
 
 /// Construct a `PhantomData` with a type parameter determined by a value.
 #[must_use]

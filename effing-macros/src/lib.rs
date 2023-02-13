@@ -10,31 +10,6 @@ use syn::{
     Signature, Token, Type, TypeParam, TypePath, Visibility,
 };
 
-fn quote_do(e: &Expr) -> Expr {
-    parse_quote! {
-        {
-            use ::core::ops::{Generator, GeneratorState};
-            use ::effing_mad::frunk::Coproduct;
-            let mut gen = #e;
-            let mut injection = Coproduct::inject(::effing_mad::injection::Begin);
-            loop {
-                // interesting hack to trick the borrow checker
-                // allows cloneable generators
-                let res = {
-                    // safety: same as in `handle_group`
-                    let pinned = unsafe { ::core::pin::Pin::new_unchecked(&mut gen) };
-                    pinned.resume(injection)
-                };
-                match res {
-                    GeneratorState::Yielded(effs) =>
-                        injection = (yield effs.embed()).subset().ok().unwrap(),
-                    GeneratorState::Complete(v) => break v,
-                }
-            }
-        }
-    }
-}
-
 struct Effectful {
     effects: Punctuated<Type, Token![,]>,
 }
@@ -43,32 +18,6 @@ impl Parse for Effectful {
     fn parse(input: ParseStream) -> Result<Self, Error> {
         let effects = Punctuated::parse_terminated(input)?;
         Ok(Effectful { effects })
-    }
-}
-
-impl syn::visit_mut::VisitMut for Effectful {
-    fn visit_expr_mut(&mut self, e: &mut Expr) {
-        match e {
-            Expr::Field(ref mut ef) => {
-                self.visit_expr_mut(&mut ef.base);
-                let Member::Named(ref name) = ef.member else { return };
-                if name == "do_" {
-                    *e = quote_do(&ef.base);
-                }
-            },
-            Expr::Yield(ref y) => {
-                let Some(ref expr) = y.expr else { panic!("no expr?") };
-                *e = parse_quote! {
-                    {
-                        let effect = { #expr };
-                        let marker = ::effing_mad::macro_impl::mark(&effect);
-                        let injs = yield ::effing_mad::frunk::Coproduct::inject(effect);
-                        ::effing_mad::macro_impl::get_inj(injs, marker).unwrap()
-                    }
-                };
-            },
-            e => syn::visit_mut::visit_expr_mut(self, e),
-        }
     }
 }
 
@@ -107,7 +56,7 @@ impl syn::visit_mut::VisitMut for Effectful {
 /// `Clone` and `Unpin`.
 #[proc_macro_attribute]
 pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
-    let mut effects = parse_macro_input!(args as Effectful);
+    let effects = parse_macro_input!(args as Effectful);
     let effect_names = effects.effects.iter();
     let yield_type = quote! {
         <::effing_mad::frunk::Coprod!(#(#effect_names),*) as ::effing_mad::macro_impl::FlattenEffects>::Out
@@ -116,7 +65,7 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         mut attrs,
         vis,
         sig,
-        mut block,
+        block,
     } = parse_macro_input!(item as ItemFn);
     let Signature {
         constness,
@@ -131,7 +80,6 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Default => quote!(()),
         ReturnType::Type(_r_arrow, ref ty) => ty.to_token_stream(),
     };
-    syn::visit_mut::visit_block_mut(&mut effects, &mut block);
     let mut cloneable = false;
     attrs.retain(|attr| {
         if attr.path == parse_quote!(effectful::cloneable) {

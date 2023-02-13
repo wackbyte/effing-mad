@@ -12,7 +12,7 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use effing_mad::{effectful, handle, handler, Effect};
+use effing_mad::{effectful, handle, handler, Effect, perform, lift};
 
 fn main() {
     let cancelled = handle(combined(), handler!(Cancel => break));
@@ -58,10 +58,10 @@ impl Effect for FileRead {
 #[allow(unreachable_code)]
 #[effectful(Cancel, Log<'a>)]
 fn simple<'a>() {
-    yield Log("starting...".into());
-    yield Log("something went wrong! aah!".into());
-    yield Cancel;
-    yield Log("no, sorry. i have gone home.".into());
+    perform!(Log("starting...".into()));
+    perform!(Log("something went wrong! aah!".into()));
+    perform!(Cancel);
+    perform!(Log("no, sorry. i have gone home.".into()));
 }
 
 // This function demonstrates how effect handlers can pass values back into the effectful function,
@@ -69,11 +69,11 @@ fn simple<'a>() {
 // subset of the caller's effects.
 #[effectful(Cancel, Log<'a>, FileRead)]
 fn combined<'a>() {
-    let mischief = yield FileRead("~/my passwords.txt".into());
+    let mischief = perform!(FileRead("~/my passwords.txt".into()));
     // this is why Log has to use Cow - we can't yield something referencing local content...
     // ...for some reason. I sure hope that doesn't foil my plans to take over Rust with algebraic
     // effects.
-    yield Log(format!("I know your password! It's {mischief}").into());
-    yield Log("I'm going to do evil things and you can't stop me!".into());
-    simple().do_;
+    perform!(Log(format!("I know your password! It's {mischief}").into()));
+    perform!(Log("I'm going to do evil things and you can't stop me!".into()));
+    lift!(simple());
 }

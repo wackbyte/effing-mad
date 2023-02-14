@@ -57,7 +57,7 @@ impl Parse for Effectful {
 pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(args as Effectful);
     let effect_names = input.effects.iter();
-    let yield_type = quote! {
+    let effects_type = quote! {
         <::effing_mad::data::union::Union!(#(#effect_names),*) as ::effing_mad::macro_impl::FlattenEffects>::Out
     };
     let ItemFn {
@@ -75,7 +75,7 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         output,
         ..
     } = sig;
-    let return_type = match output {
+    let output_type = match output {
         ReturnType::Default => quote!(()),
         ReturnType::Type(_r_arrow, ref ty) => ty.to_token_stream(),
     };
@@ -93,14 +93,15 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         #(#attrs)*
         #vis #constness #unsafety
         fn #ident #generics(#inputs)
-        -> impl ::core::ops::Generator<
-            <#yield_type as ::effing_mad::injection::EffectList>::Injections,
-            Yield = #yield_type,
-            Return = #return_type
+        -> impl ::effing_mad::Effectful<
+            Effects = #effects_type,
+            Output = #output_type
         > #clone_bound {
-            move |_begin: <#yield_type as ::effing_mad::injection::EffectList>::Injections| {
-                #block
-            }
+            ::effing_mad::GeneratorToEffectful::new(
+                move |_begin: <#effects_type as ::effing_mad::injection::EffectList>::Injections| {
+                    #block
+                },
+            )
         }
     }
     .into()

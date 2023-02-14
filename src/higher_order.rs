@@ -1,40 +1,34 @@
 //! Effectful versions of standard higher-order functions.
 
 use {
-    crate::injection::EffectList,
-    core::{
-        marker::PhantomData,
-        ops::{Generator, GeneratorState},
-        pin::Pin,
-    },
+    crate::{injection::EffectList, Effectful, EffectfulState},
+    core::pin::Pin,
 };
 
 /// An implementation detail of [`OptionExt::map_eff`].
-pub struct OptionMapEff<G, Effs, U> {
-    g: Option<G>,
-    _effs: PhantomData<*mut Effs>,
-    _u: PhantomData<fn() -> U>,
+#[derive(Clone)]
+pub struct OptionMapEff<G> {
+    inner: Option<G>,
 }
 
-impl<G, Effs, U> Generator<Effs::Injections> for OptionMapEff<G, Effs, U>
+impl<G> Effectful for OptionMapEff<G>
 where
-    Effs: EffectList,
-    G: Generator<Effs::Injections, Yield = Effs, Return = U>,
+    G: Effectful,
 {
-    type Yield = Effs;
-    type Return = Option<U>;
+    type Effects = G::Effects;
+    type Output = Option<G::Output>;
 
     fn resume(
         self: Pin<&mut Self>,
-        injs: Effs::Injections,
-    ) -> GeneratorState<Self::Yield, Self::Return> {
+        injections: <Self::Effects as EffectList>::Injections,
+    ) -> EffectfulState<Self::Effects, Self::Output> {
         unsafe {
-            match &mut self.get_unchecked_mut().g {
-                Some(g) => match Pin::new_unchecked(g).resume(injs) {
-                    GeneratorState::Yielded(effs) => GeneratorState::Yielded(effs),
-                    GeneratorState::Complete(ret) => GeneratorState::Complete(Some(ret)),
+            match &mut self.get_unchecked_mut().inner {
+                Some(g) => match Pin::new_unchecked(g).resume(injections) {
+                    EffectfulState::Perform(effects) => EffectfulState::Perform(effects),
+                    EffectfulState::Return(output) => EffectfulState::Return(Some(output)),
                 },
-                None => GeneratorState::Complete(None),
+                None => EffectfulState::Return(None),
             }
         }
     }
@@ -48,56 +42,48 @@ pub trait OptionExt<T>: Sized {
     /// which must then be handled by its caller. This means that the mapper function can, for
     /// example, await a `Future`. Other control flow constructs are of course possible here, and
     /// impossible with vanilla [`Option::map`].
-    fn map_eff<Effs, G>(self, g: impl FnOnce(T) -> G) -> OptionMapEff<G, Effs, G::Return>
+    fn map_eff<G>(self, g: impl FnOnce(T) -> G) -> OptionMapEff<G>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>;
+        G: Effectful;
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn map_eff<Effs, G>(self, g: impl FnOnce(T) -> G) -> OptionMapEff<G, Effs, G::Return>
+    fn map_eff<G>(self, g: impl FnOnce(T) -> G) -> OptionMapEff<G>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>,
+        G: Effectful,
     {
-        OptionMapEff {
-            g: self.map(g),
-            _effs: PhantomData,
-            _u: PhantomData,
-        }
+        OptionMapEff { inner: self.map(g) }
     }
 }
 
 /// An implementation detail of [`ResultExt::map_eff`].
-pub struct ResultMapEff<G, E, Effs, U> {
-    g: Option<Result<G, E>>,
-    _effs: PhantomData<*mut Effs>,
-    _u: PhantomData<fn() -> U>,
+#[derive(Clone)]
+pub struct ResultMapEff<G, E> {
+    inner: Option<Result<G, E>>,
 }
 
-impl<G, E, Effs, U> Generator<Effs::Injections> for ResultMapEff<G, E, Effs, U>
+impl<G, E> Effectful for ResultMapEff<G, E>
 where
+    G: Effectful,
     E: Unpin,
-    Effs: EffectList,
-    G: Generator<Effs::Injections, Yield = Effs, Return = U>,
 {
-    type Yield = Effs;
-    type Return = Result<U, E>;
+    type Effects = G::Effects;
+    type Output = Result<G::Output, E>;
 
     fn resume(
         self: Pin<&mut Self>,
-        injs: Effs::Injections,
-    ) -> GeneratorState<Self::Yield, Self::Return> {
+        injections: <Self::Effects as EffectList>::Injections,
+    ) -> EffectfulState<Self::Effects, Self::Output> {
         unsafe {
-            let g = &mut self.get_unchecked_mut().g;
+            let g = &mut self.get_unchecked_mut().inner;
             match g {
-                Some(Ok(g)) => match Pin::new_unchecked(g).resume(injs) {
-                    GeneratorState::Yielded(effs) => GeneratorState::Yielded(effs),
-                    GeneratorState::Complete(ret) => GeneratorState::Complete(Ok(ret)),
+                Some(Ok(g)) => match Pin::new_unchecked(g).resume(injections) {
+                    EffectfulState::Perform(effects) => EffectfulState::Perform(effects),
+                    EffectfulState::Return(output) => EffectfulState::Return(Ok(output)),
                 },
                 Some(Err(_)) => {
                     let Some(Err(e)) = core::mem::take(g) else { unreachable!() };
-                    GeneratorState::Complete(Err(e))
+                    EffectfulState::Return(Err(e))
                 },
                 None => panic!("resumed after completed"),
             }
@@ -106,35 +92,33 @@ where
 }
 
 /// An implementation detail of [`ResultExt::map_err_eff`].
-pub struct ResultMapErrEff<G, T, Effs, U> {
-    g: Option<Result<T, G>>,
-    _effs: PhantomData<*mut Effs>,
-    _u: PhantomData<fn() -> U>,
+#[derive(Clone)]
+pub struct ResultMapErrEff<T, G> {
+    inner: Option<Result<T, G>>,
 }
 
-impl<G, T, Effs, U> Generator<Effs::Injections> for ResultMapErrEff<G, T, Effs, U>
+impl<T, G> Effectful for ResultMapErrEff<T, G>
 where
     T: Unpin,
-    Effs: EffectList,
-    G: Generator<Effs::Injections, Yield = Effs, Return = U>,
+    G: Effectful,
 {
-    type Yield = Effs;
-    type Return = Result<T, U>;
+    type Effects = G::Effects;
+    type Output = Result<T, G::Output>;
 
     fn resume(
         self: Pin<&mut Self>,
-        injs: Effs::Injections,
-    ) -> GeneratorState<Self::Yield, Self::Return> {
+        injections: <Self::Effects as EffectList>::Injections,
+    ) -> EffectfulState<Self::Effects, Self::Output> {
         unsafe {
-            let g = &mut self.get_unchecked_mut().g;
+            let g = &mut self.get_unchecked_mut().inner;
             match g {
-                Some(Err(g)) => match Pin::new_unchecked(g).resume(injs) {
-                    GeneratorState::Yielded(effs) => GeneratorState::Yielded(effs),
-                    GeneratorState::Complete(ret) => GeneratorState::Complete(Err(ret)),
+                Some(Err(g)) => match Pin::new_unchecked(g).resume(injections) {
+                    EffectfulState::Perform(effects) => EffectfulState::Perform(effects),
+                    EffectfulState::Return(output) => EffectfulState::Return(Err(output)),
                 },
                 Some(Ok(_)) => {
                     let Some(Ok(e)) = core::mem::take(g) else { unreachable!() };
-                    GeneratorState::Complete(Ok(e))
+                    EffectfulState::Return(Ok(e))
                 },
                 None => panic!("resumed after completed"),
             }
@@ -147,42 +131,34 @@ pub trait ResultExt<T, E>: Sized {
     /// Transforms the value inside a [`Result::Ok`] with some effects.
     ///
     /// For more details, see [`OptionExt::map_eff`].
-    fn map_eff<Effs, G>(self, g: impl FnOnce(T) -> G) -> ResultMapEff<G, E, Effs, G::Return>
+    fn map_eff<G>(self, g: impl FnOnce(T) -> G) -> ResultMapEff<G, E>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>;
+        G: Effectful;
 
     /// Transforms the value inside a [`Result::Err`] with some effects.
     ///
     /// For more details, see [`OptionExt::map_eff`].
-    fn map_err_eff<Effs, G>(self, g: impl FnOnce(E) -> G) -> ResultMapErrEff<G, T, Effs, G::Return>
+    fn map_err_eff<G>(self, g: impl FnOnce(E) -> G) -> ResultMapErrEff<T, G>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>;
+        G: Effectful;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn map_eff<Effs, G>(self, g: impl FnOnce(T) -> G) -> ResultMapEff<G, E, Effs, G::Return>
+    fn map_eff<G>(self, g: impl FnOnce(T) -> G) -> ResultMapEff<G, E>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>,
+        G: Effectful,
     {
         ResultMapEff {
-            g: Some(self.map(g)),
-            _effs: PhantomData,
-            _u: PhantomData,
+            inner: Some(self.map(g)),
         }
     }
 
-    fn map_err_eff<Effs, G>(self, g: impl FnOnce(E) -> G) -> ResultMapErrEff<G, T, Effs, G::Return>
+    fn map_err_eff<G>(self, g: impl FnOnce(E) -> G) -> ResultMapErrEff<T, G>
     where
-        Effs: EffectList,
-        G: Generator<Effs::Injections, Yield = Effs>,
+        G: Effectful,
     {
         ResultMapErrEff {
-            g: Some(self.map_err(g)),
-            _effs: PhantomData,
-            _u: PhantomData,
+            inner: Some(self.map_err(g)),
         }
     }
 }

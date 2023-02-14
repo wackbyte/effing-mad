@@ -3,14 +3,11 @@
 use {
     crate::{
         data::Union,
-        injection::{Begin, Tagged},
-        Effect,
+        injection::{Begin, EffectList, Tagged},
+        Effect, Effectful, EffectfulState,
     },
     alloc::vec::Vec,
-    core::{
-        ops::{Generator, GeneratorState},
-        pin::pin,
-    },
+    core::pin::pin,
 };
 
 /// Nondeterminism effect.
@@ -26,9 +23,9 @@ impl<T> Effect for Nondet<T> {
 }
 
 /// Run a nondeterministic computation, collecting all the resulting return values into a `Vec`.
-pub fn run_nondet<G, T>(g: G) -> Vec<G::Return>
+pub fn run_nondet<G, T>(g: G) -> Vec<G::Output>
 where
-    G: Generator<Union!(Tagged<T, Nondet<T>>, Begin), Yield = Union!(Nondet<T>)> + Clone,
+    G: Effectful<Effects = Union!(Nondet<T>)> + Clone,
 {
     let mut outputs = Vec::new();
     run_nondet_inner(g, Union::inject(Begin), &mut outputs);
@@ -37,14 +34,14 @@ where
 
 fn run_nondet_inner<G, T>(
     mut g: G,
-    injections: Union!(Tagged<T, Nondet<T>>, Begin),
-    outputs: &mut Vec<G::Return>,
+    injections: <G::Effects as EffectList>::Injections,
+    outputs: &mut Vec<G::Output>,
 ) where
-    G: Generator<Union!(Tagged<T, Nondet<T>>, Begin), Yield = Union!(Nondet<T>)> + Clone,
+    G: Effectful<Effects = Union!(Nondet<T>)> + Clone,
 {
     let mut pin = pin!(g);
     match pin.as_mut().resume(injections) {
-        GeneratorState::Yielded(effects) => {
+        EffectfulState::Perform(effects) => {
             let Nondet(xs) = match effects {
                 Union::Inl(nondet) => nondet,
                 Union::Inr(never) => match never {},
@@ -54,6 +51,6 @@ fn run_nondet_inner<G, T>(
                 run_nondet_inner(g2, Union::inject(Tagged::new(x)), outputs);
             }
         },
-        GeneratorState::Complete(output) => outputs.push(output),
+        EffectfulState::Return(output) => outputs.push(output),
     }
 }

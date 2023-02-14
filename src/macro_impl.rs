@@ -10,29 +10,29 @@ use {
 };
 
 pub macro perform($effect:expr $(,)?) {{
-    let effect = $effect;
+    let effect = $crate::IntoEffect::into_effect($effect);
     let marker = $crate::macro_impl::marker(&effect);
     let injections = yield $crate::data::Union::inject(effect);
     $crate::macro_impl::uninject_with_marker(injections, marker).unwrap()
 }}
 
-pub macro lift($generator:expr $(,)?) {{
-    let mut generator = $generator;
+pub macro lift($effectful:expr $(,)?) {{
+    let mut effectful = $crate::IntoEffectful::into_effectful($effectful);
     let mut injections = $crate::data::Union::inject($crate::injection::Begin);
     loop {
         let state = {
-            let pin = unsafe { ::core::pin::Pin::new_unchecked(&mut generator) };
-            ::core::ops::Generator::resume(pin, injections)
+            let pin = unsafe { ::core::pin::Pin::new_unchecked(&mut effectful) };
+            $crate::Effectful::resume(pin, injections)
         };
         match state {
-            ::core::ops::GeneratorState::Yielded(effects) => {
+            $crate::EffectfulState::Perform(effects) => {
                 injections = $crate::data::union::Subset::subset(
                     yield $crate::data::union::Superset::superset(effects),
                 )
                 .ok()
                 .unwrap();
             },
-            ::core::ops::GeneratorState::Complete(output) => break output,
+            $crate::EffectfulState::Return(output) => break output,
         }
     }
 }}

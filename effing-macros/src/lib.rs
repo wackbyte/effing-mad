@@ -58,7 +58,7 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(args as Effectful);
     let effect_names = input.effects.iter();
     let yield_type = quote! {
-        <::effing_mad::frunk::Coprod!(#(#effect_names),*) as ::effing_mad::macro_impl::FlattenEffects>::Out
+        <::effing_mad::data::union::Union!(#(#effect_names),*) as ::effing_mad::macro_impl::FlattenEffects>::Out
     };
     let ItemFn {
         mut attrs,
@@ -206,11 +206,11 @@ pub fn handler(input: TokenStream) -> TokenStream {
         let HandlerArm { pat, ty, body, .. } = arm;
 
         matcher = quote! {
-            match ::effing_mad::frunk::coproduct::CoprodUninjector::uninject(effs) {
+            match ::effing_mad::data::union::Uninject::uninject(effs) {
                 Ok(#pat) => {
                     let __effing_inj = #body;
                     #[allow(unreachable_code)]
-                    ::effing_mad::frunk::coproduct::CoprodInjector::inject(
+                    ::effing_mad::data::union::Inject::inject(
                         ::effing_mad::injection::Tagged::<_, #ty>::new(
                             __effing_inj
                         )
@@ -221,7 +221,7 @@ pub fn handler(input: TokenStream) -> TokenStream {
         };
         eff_tys.push(ty);
     }
-    let effs_ty = quote!(::effing_mad::frunk::Coprod!(#(#eff_tys),*));
+    let effs_ty = quote!(::effing_mad::data::union::Union!(#(#eff_tys),*));
 
     quote! {
         #moveness |effs: #effs_ty| #asyncness {

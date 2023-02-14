@@ -1,55 +1,45 @@
 //! Implementation details of the macros exported by `effing_mad`.
 
-use crate::{
-    injection::{EffectList, Tagged},
-    Effect, EffectGroup,
-};
-use core::{marker::PhantomData, ops::ControlFlow};
-use frunk::{
-    coproduct::{CNil, CoprodUninjector},
-    Coproduct,
+use {
+    crate::{
+        data::{union, Union, Void},
+        injection::{EffectList, Tagged},
+        Effect, EffectGroup,
+    },
+    core::marker::PhantomData,
 };
 
-#[macro_export]
-macro_rules! perform {
-    ($effect:expr $(,)?) => {{
-        let effect = $effect;
-        let marker = ::effing_mad::macro_impl::mark(&effect);
-        let injs = yield $crate::frunk::Coproduct::inject(effect);
-        $crate::macro_impl::get_inj(injs, marker).unwrap()
-    }};
-}
+pub macro perform($effect:expr $(,)?) {{
+    let effect = $effect;
+    let marker = $crate::macro_impl::marker(&effect);
+    let injections = yield $crate::data::Union::inject(effect);
+    $crate::macro_impl::uninject_with_marker(injections, marker).unwrap()
+}}
 
-#[macro_export]
-macro_rules! lift {
-    ($computation:expr $(,)?) => {{
-        let mut gen = $computation;
-        let mut injection = $crate::frunk::Coproduct::inject($crate::injection::Begin);
-        loop {
-            // interesting hack to trick the borrow checker
-            // allows cloneable generators
-            let res = {
-                // safety: same as in `handle_group`
-                let pinned = unsafe { ::core::pin::Pin::new_unchecked(&mut gen) };
-                ::core::ops::Generator::resume(pinned, injection)
-            };
-            match res {
-                ::core::ops::GeneratorState::Yielded(effs) => {
-                    injection = $crate::frunk::coproduct::CoproductSubsetter::subset(
-                        yield $crate::frunk::coproduct::CoproductEmbedder::embed(effs),
-                    )
-                    .ok()
-                    .unwrap();
-                },
-                ::core::ops::GeneratorState::Complete(v) => break v,
-            }
+pub macro lift($generator:expr $(,)?) {{
+    let mut generator = $generator;
+    let mut injections = $crate::data::Union::inject($crate::injection::Begin);
+    loop {
+        let state = {
+            let pin = unsafe { ::core::pin::Pin::new_unchecked(&mut generator) };
+            ::core::ops::Generator::resume(pin, injections)
+        };
+        match state {
+            ::core::ops::GeneratorState::Yielded(effects) => {
+                injections = $crate::data::union::Subset::subset(
+                    yield $crate::data::union::Superset::superset(effects),
+                )
+                .ok()
+                .unwrap();
+            },
+            ::core::ops::GeneratorState::Complete(output) => break output,
         }
-    }};
-}
+    }
+}}
 
 /// Construct a `PhantomData` with a type parameter determined by a value.
 #[must_use]
-pub fn mark<T>(_: &T) -> PhantomData<T> {
+pub fn marker<T>(_: &T) -> PhantomData<T> {
     PhantomData
 }
 
@@ -59,12 +49,15 @@ pub fn mark<T>(_: &T) -> PhantomData<T> {
 /// a turbofish or via inference. However, [`effing_macros::effectful`] needs a way to specify E
 /// without naming any types at all. The marker argument along with [`mark`] allows specifying E
 /// by naming a value instead.
-pub fn get_inj<E, Injs, Index>(injs: Injs, _marker: PhantomData<E>) -> Option<E::Injection>
+pub fn uninject_with_marker<E, Is, Index>(
+    injections: Is,
+    _marker: PhantomData<E>,
+) -> Option<E::Injection>
 where
     E: Effect,
-    Injs: CoprodUninjector<Tagged<E::Injection, E>, Index>,
+    Is: union::Uninject<Tagged<E::Injection, E>, Index>,
 {
-    injs.uninject().ok().map(Tagged::untag)
+    injections.uninject().ok().map(Tagged::untag)
 }
 
 /// A type-level function from lists of `Effect`s and `EffectGroup`s to lists of `Effects` only.
@@ -79,7 +72,7 @@ pub trait FlattenEffects {
     type Out: EffectList;
 }
 
-impl<G, Tail> FlattenEffects for Coproduct<G, Tail>
+impl<G, Tail> FlattenEffects for Union<G, Tail>
 where
     G: EffectGroup,
     <G as EffectGroup>::Effects: Prepend<Tail>,
@@ -102,10 +95,13 @@ pub trait Prepend<Tail> {
     type Out;
 }
 
-impl<Tail> Prepend<Tail> for CNil {
+impl<Tail> Prepend<Tail> for Void {
     type Out = Tail;
 }
 
-impl<Head, Tail1: Prepend<Tail2>, Tail2> Prepend<Tail2> for Coproduct<Head, Tail1> {
-    type Out = Coproduct<Head, Tail1::Out>;
+impl<Head, Tail1, Tail2> Prepend<Tail2> for Union<Head, Tail1>
+where
+    Tail1: Prepend<Tail2>,
+{
+    type Out = Union<Head, Tail1::Out>;
 }

@@ -1,8 +1,10 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use core::ops::ControlFlow;
-use effing_mad::{effectful, handle, perform, run, transform0, transform1, Effect};
+use {
+    effing_mad::{effectful, handle, perform, run, transform0, transform1, Effect},
+    std::ops::ControlFlow,
+};
 
 fn main() {
     let work = take_over_the_world();

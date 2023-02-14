@@ -1,12 +1,13 @@
 //! Effectful versions of standard higher-order functions.
 
-use core::{
-    marker::PhantomData,
-    ops::{Generator, GeneratorState},
-    pin::Pin,
+use {
+    crate::injection::EffectList,
+    core::{
+        marker::PhantomData,
+        ops::{Generator, GeneratorState},
+        pin::Pin,
+    },
 };
-
-use crate::injection::EffectList;
 
 /// An implementation detail of [`OptionExt::map_eff`].
 pub struct OptionMapEff<G, Effs, U> {

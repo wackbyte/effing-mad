@@ -8,9 +8,11 @@
 #![feature(generators)]
 #![feature(generator_trait)]
 
-use core::marker::PhantomData;
-use effing_mad::{
-    effectful, frunk::Coprod, handle_group, handler, perform, run, Effect, EffectGroup,
+use {
+    effing_mad::{
+        data::Union, effectful, handle_group, handler, perform, run, Effect, EffectGroup,
+    },
+    std::marker::PhantomData,
 };
 
 fn main() {
@@ -39,7 +41,7 @@ impl<T> Effect for Put<T> {
 struct State<T>(PhantomData<T>);
 
 impl<T> EffectGroup for State<T> {
-    type Effects = Coprod!(Get<T>, Put<T>);
+    type Effects = Union!(Get<T>, Put<T>);
 }
 
 // Rust encourages immutability!

@@ -1,17 +1,17 @@
 //! Functions and types for converting between Futures and effectful computations.
 
-use core::{
-    future::Future,
-    ops::{Generator, GeneratorState},
-    pin::Pin,
-    task::{Context, Poll, Waker},
-};
-
-use frunk::{Coprod, Coproduct};
-
-use crate::{
-    injection::{Begin, EffectList, Tagged},
-    Effect, EffectGroup,
+use {
+    crate::{
+        data::{Union, Void},
+        injection::{Begin, EffectList, Tagged},
+        Effect, EffectGroup,
+    },
+    core::{
+        future::Future,
+        ops::{Generator, GeneratorState},
+        pin::Pin,
+        task::{Context, Poll, Waker},
+    },
 };
 
 /// An effect equivalent to `future.await`.
@@ -28,14 +28,14 @@ impl Effect for GetContext {
     type Injection = *const Waker;
 }
 
-type FEffs = <FutureEffs as EffectGroup>::Effects;
-type FInjs = <Coprod!(Await, GetContext) as EffectList>::Injections;
+type FEffs = <Async as EffectGroup>::Effects;
+type FInjs = <Union!(Await, GetContext) as EffectList>::Injections;
 
 /// The effects that allow effectful computations to emulate Futures.
-pub struct FutureEffs;
+pub struct Async;
 
-impl EffectGroup for FutureEffs {
-    type Effects = Coprod!(Await, GetContext);
+impl EffectGroup for Async {
+    type Effects = Union!(Await, GetContext);
 }
 
 /// Brings a computation from effects land into futures land.
@@ -57,31 +57,35 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // see the todo on has_begun
-        let mut inj = if self.has_begun {
-            Coproduct::inject(Tagged::new(()))
+        let mut injections = if self.has_begun {
+            Union::inject(Tagged::new(()))
         } else {
-            Coproduct::inject(Begin)
+            Union::inject(Begin)
         };
+
         // project
-        let g = unsafe { Pin::new_unchecked(&mut self.as_mut().get_unchecked_mut().g) };
-        let res = g.resume(inj);
-        match res {
-            GeneratorState::Yielded(eff) => match eff.uninject() {
-                Ok(GetContext) => inj = Coproduct::inject(Tagged::new(cx.waker() as *const Waker)),
-                Err(Coproduct::Inl(Await)) => panic!("can't await without context"),
-                Err(Coproduct::Inr(never)) => match never {},
+        let pin = unsafe { Pin::new_unchecked(&mut self.as_mut().get_unchecked_mut().g) };
+        let state = pin.resume(injections);
+        match state {
+            GeneratorState::Yielded(effects) => match effects.uninject() {
+                Ok(GetContext) => {
+                    injections = Union::inject(Tagged::new(cx.waker() as *const Waker))
+                },
+                Err(Union::Inl(Await)) => panic!("can't await without context"),
+                Err(Union::Inr(never)) => match never {},
             },
-            GeneratorState::Complete(ret) => return Poll::Ready(ret),
+            GeneratorState::Complete(output) => return Poll::Ready(output),
         }
-        let g = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().g) };
-        let res = g.resume(inj);
-        match res {
-            GeneratorState::Yielded(eff) => match eff.uninject() {
+
+        let pin = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().g) };
+        let state = pin.resume(injections);
+        match state {
+            GeneratorState::Yielded(effects) => match effects.uninject() {
                 Ok(Await) => Poll::Pending,
-                Err(Coproduct::Inl(GetContext)) => panic!("no need to GetContext twice"),
-                Err(Coproduct::Inr(never)) => match never {},
+                Err(Union::Inl(GetContext)) => panic!("no need to GetContext twice"),
+                Err(Union::Inr(never)) => match never {},
             },
-            GeneratorState::Complete(ret) => Poll::Ready(ret),
+            GeneratorState::Complete(output) => Poll::Ready(output),
         }
     }
 }
@@ -101,16 +105,19 @@ where
     type Yield = FEffs;
     type Return = F::Output;
 
-    fn resume(self: Pin<&mut Self>, injs: FInjs) -> GeneratorState<Self::Yield, Self::Return> {
+    fn resume(
+        self: Pin<&mut Self>,
+        injections: FInjs,
+    ) -> GeneratorState<Self::Yield, Self::Return> {
         // safety: project
-        let f = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().f) };
-        match injs.uninject::<Tagged<*const Waker, _>, _>() {
+        let pin = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().f) };
+        match injections.uninject::<Tagged<*const Waker, _>, _>() {
             // safety: it's a pointer to something that the caller has a reference to.
-            Ok(waker) => match f.poll(&mut Context::from_waker(unsafe { &*waker.untag() })) {
-                Poll::Ready(ret) => GeneratorState::Complete(ret),
-                Poll::Pending => GeneratorState::Yielded(Coproduct::inject(GetContext)),
+            Ok(waker) => match pin.poll(&mut Context::from_waker(unsafe { &*waker.untag() })) {
+                Poll::Ready(output) => GeneratorState::Complete(output),
+                Poll::Pending => GeneratorState::Yielded(Union::inject(GetContext)),
             },
-            Err(_) => GeneratorState::Yielded(Coproduct::inject(GetContext)),
+            Err(_) => GeneratorState::Yielded(Union::inject(GetContext)),
         }
     }
 }
@@ -120,6 +127,7 @@ pub trait FutureExt: Sized {
     /// Wraps this `Future` in a type that allows it to be used as an effectful computation.
     fn effectfulise(self) -> Effectfulise<Self>;
 }
+
 /// Future-related functions on effectful computations.
 pub trait EffExt: Sized {
     /// Wraps this computation in a type that allows it to be used as a `Future`.
@@ -131,6 +139,7 @@ impl<F: Future> FutureExt for F {
         Effectfulise { f: self }
     }
 }
+
 impl<G> EffExt for G
 where
     G: Generator<FInjs, Yield = FEffs>,

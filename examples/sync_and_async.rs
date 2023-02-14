@@ -2,7 +2,7 @@
 #![feature(generator_trait)]
 
 use effing_mad::{
-    effectful, frunk::Coprod, handle_group, handle_group_async, handler, perform, run, Effect,
+    data::Union, effectful, handle_group, handle_group_async, handler, perform, run, Effect,
     EffectGroup,
 };
 
@@ -25,7 +25,7 @@ impl Effect for HttpGet {
 struct HttpRequest;
 
 impl EffectGroup for HttpRequest {
-    type Effects = Coprod!(HttpGet);
+    type Effects = Union!(HttpGet);
 }
 
 // this function does not specify whether the request happens synchronously or asynchronously

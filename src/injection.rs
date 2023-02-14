@@ -1,10 +1,12 @@
 //! Implementation details of injections - values that come from running effects.
 
-use core::marker::PhantomData;
-
-use frunk::{coproduct::CNil, Coproduct};
-
-use crate::Effect;
+use {
+    crate::{
+        data::{Union, Void},
+        Effect,
+    },
+    core::marker::PhantomData,
+};
 
 /// Before an effectful computation has started, there is no injection to pass in, because no
 /// effects have been run yet. However, due to the signature of
@@ -63,14 +65,14 @@ pub trait EffectList {
     type Injections;
 }
 
-impl EffectList for CNil {
-    type Injections = Coproduct<Begin, CNil>;
+impl EffectList for Void {
+    type Injections = Union<Begin, Void>;
 }
 
-impl<E, Es> EffectList for Coproduct<E, Es>
+impl<E, Es> EffectList for Union<E, Es>
 where
     E: Effect,
     Es: EffectList,
 {
-    type Injections = Coproduct<Tagged<E::Injection, E>, Es::Injections>;
+    type Injections = Union<Tagged<E::Injection, E>, Es::Injections>;
 }

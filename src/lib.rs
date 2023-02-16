@@ -36,7 +36,7 @@ extern crate alloc;
 
 pub mod data;
 pub mod effects;
-pub mod higher_order;
+//pub mod higher_order;
 pub mod injection;
 
 #[doc(hidden)]
@@ -55,41 +55,45 @@ use {
     },
     core::{
         future::Future,
-        marker::PhantomData,
+        marker::{PhantomData, Unpin},
         ops::{ControlFlow, Generator, GeneratorState},
         pin::{pin, Pin},
     },
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum EffectfulState<Es, O> {
-    Perform(Es),
-    Return(O),
+pub enum EffectfulState<G>
+where
+    G: Effectful,
+{
+    Perform(G::Effects, G),
+    Return(G::Output),
 }
 
 pub trait Effectful {
     type Effects: EffectList;
     type Output;
 
-    fn resume(
-        self: Pin<&mut Self>,
-        injections: <Self::Effects as EffectList>::Injections,
-    ) -> EffectfulState<Self::Effects, Self::Output>;
+    fn resume(self, injections: <Self::Effects as EffectList>::Injections) -> EffectfulState<Self>
+    where
+        Self: Sized;
 }
 
 pub struct GeneratorToEffectful<G, Es> {
     inner: G,
-    _marker: PhantomData<*mut Es>,
+    marker: PhantomData<*mut Es>,
 }
 
 impl<G, Es> GeneratorToEffectful<G, Es> {
     pub const fn new(inner: G) -> Self {
         Self {
             inner,
-            _marker: PhantomData,
+            marker: PhantomData,
         }
     }
 }
+
+impl<G, Es> Copy for GeneratorToEffectful<G, Es> where G: Copy {}
 
 impl<G, Es> Clone for GeneratorToEffectful<G, Es>
 where
@@ -98,31 +102,35 @@ where
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            _marker: PhantomData,
+            marker: PhantomData,
         }
     }
 }
 
 impl<G, Es> Effectful for GeneratorToEffectful<G, Es>
 where
-    G: Generator<Es::Injections, Yield = Es>,
+    G: Generator<Es::Injections, Yield = Es> + Unpin,
     Es: EffectList,
 {
     type Effects = Es;
     type Output = G::Return;
 
     fn resume(
-        self: Pin<&mut Self>,
+        mut self,
         injections: <Self::Effects as EffectList>::Injections,
-    ) -> EffectfulState<Self::Effects, Self::Output> {
-        let pin = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
-        match Generator::resume(pin, injections) {
-            GeneratorState::Yielded(effects) => EffectfulState::Perform(effects),
+    ) -> EffectfulState<Self> {
+        let state = {
+            let pin = Pin::new(&mut self.inner);
+            pin.resume(injections)
+        };
+        match state {
+            GeneratorState::Yielded(effects) => EffectfulState::Perform(effects, self),
             GeneratorState::Complete(output) => EffectfulState::Return(output),
         }
     }
 }
 
+/*
 #[derive(Clone)]
 pub struct EffectfulToGenerator<G> {
     inner: G,
@@ -152,7 +160,7 @@ where
         }
     }
 }
-
+*/
 pub trait IntoEffect {
     type Injection;
     type IntoEffect: Effect<Injection = Self::Injection>;
@@ -218,39 +226,82 @@ where
     type Effects = Union!(E);
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct Ready<T> {
+    value: T,
+}
+
+impl<T> Effectful for Ready<T> {
+    type Effects = Void;
+    type Output = T;
+
+    fn resume(
+        self,
+        _injections: <Self::Effects as EffectList>::Injections,
+    ) -> EffectfulState<Self> {
+        EffectfulState::Return(self.value)
+    }
+}
+
 /// Run an effectful computation that has no effects.
 ///
 /// Effectful computations are generators, but if they have no effects, it is guaranteed that they
 /// will never yield. Therefore they can be run by resuming them once. This function does that.
 pub fn run<R>(mut g: impl Effectful<Effects = Void, Output = R>) -> R {
-    let pin = pin!(g);
-    match pin.resume(Union::Inl(Begin)) {
-        EffectfulState::Perform(never) => match never {},
+    match g.resume(Union::Inl(Begin)) {
+        EffectfulState::Perform(never, _) => match never {},
         EffectfulState::Return(output) => output,
+    }
+}
+
+pub struct Mapp<G, F, O> {
+    g: G,
+    f: F,
+    marker: PhantomData<fn() -> O>,
+}
+
+impl<G, F, O> Effectful for Mapp<G, F, O>
+where
+    G: Effectful,
+    F: FnOnce(G::Output) -> O,
+{
+    type Effects = G::Effects;
+    type Output = O;
+
+    fn resume(self, injections: <Self::Effects as EffectList>::Injections) -> EffectfulState<Self> {
+        match self.g.resume(injections) {
+            EffectfulState::Perform(effects, g) => {
+                EffectfulState::Perform(effects, Self { g, ..self })
+            },
+            EffectfulState::Return(output) => EffectfulState::Return((self.f)(output)),
+        }
+    }
+}
+
+impl<G, F, O> Clone for Mapp<G, F, O>
+where
+    G: Clone,
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            g: self.g.clone(),
+            f: self.f.clone(),
+            marker: PhantomData,
+        }
     }
 }
 
 /// Create a new effectful computation by applying a "pure" function to the return value of an
 /// existing computation.
-pub fn map<Es, T, U>(
-    mut g: impl Effectful<Effects = Es, Output = T>,
-    f: impl FnOnce(T) -> U,
-) -> impl Effectful<Effects = Es, Output = U>
-where
-    Es: EffectList,
-{
-    GeneratorToEffectful::new(move |mut injection| {
-        loop {
-            // safety: see handle_group()
-            let pin = unsafe { Pin::new_unchecked(&mut g) };
-            match pin.resume(injection) {
-                EffectfulState::Perform(effect) => injection = yield effect,
-                EffectfulState::Return(output) => return f(output),
-            }
-        }
-    })
+pub fn map<G, F, O>(g: G, f: F) -> Mapp<G, F, O> {
+    Mapp {
+        g,
+        f,
+        marker: PhantomData,
+    }
 }
-
+/*
 /// Apply a "pure" handler to an effectful computation, handling one effect.
 ///
 /// When given an effectful computation with effects (A, B, C) and a handler for effect C, this
@@ -351,7 +402,109 @@ where
         }
     })
 }
+*/
 
+pub struct HandleGroup<
+    G,
+    H,
+    HandledEs,
+    PostEs,
+    EffectIndices,
+    InjectionIndices,
+    SupersetIndices,
+> {
+    g: G,
+    h: H,
+    marker: PhantomData<*mut (
+        HandledEs,
+        PostEs,
+        EffectIndices,
+        InjectionIndices,
+        SupersetIndices,
+    )>,
+}
+
+impl<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices>
+    Effectful
+    for HandleGroup<
+        G,
+        H,
+        HandledEs,
+        PostEs,
+        EffectIndices,
+        InjectionIndices,
+        SupersetIndices,
+    >
+where
+    G: Effectful,
+    H: FnMut(HandledEs) -> ControlFlow<G::Output, <HandledEs as EffectList>::Injections>,
+    HandledEs: EffectList,
+    G::Effects: Subset<HandledEs, EffectIndices, Remainder = PostEs>,
+    PostEs: EffectList,
+    HandledEs::Injections: Superset<<G::Effects as EffectList>::Injections, InjectionIndices>,
+    PostEs::Injections: Superset<<G::Effects as EffectList>::Injections, SupersetIndices>,
+{
+    type Effects = PostEs;
+    type Output = G::Output;
+
+    fn resume(self, injections: <Self::Effects as EffectList>::Injections) -> EffectfulState<Self> {
+        let Self { mut g, mut h, .. } = self;
+        let mut injections = injections.superset();
+        loop {
+            match g.resume(injections) {
+                EffectfulState::Perform(effects, new_g) => match effects.subset() {
+                    Ok(effects) => match h(effects) {
+                        ControlFlow::Continue(new_injections) => {
+                            g = new_g;
+                            injections = new_injections.superset();
+                        },
+                        ControlFlow::Break(output) => break EffectfulState::Return(output),
+                    },
+                    Err(effects) => {
+                        break EffectfulState::Perform(
+                            effects,
+                            Self {
+                                g: new_g,
+                                h,
+                                marker: PhantomData,
+                            },
+                        )
+                    },
+                },
+                EffectfulState::Return(output) => break EffectfulState::Return(output),
+            }
+        }
+    }
+}
+
+pub fn handle_group<
+    G,
+    H,
+    HandledEs,
+    PostEs,
+    EffectIndices,
+    InjectionIndices,
+    SupersetIndices,
+>(
+    g: G,
+    h: H,
+) -> HandleGroup<
+    G,
+    H,
+    HandledEs,
+    PostEs,
+    EffectIndices,
+    InjectionIndices,
+    SupersetIndices,
+> {
+    HandleGroup {
+        g,
+        h,
+        marker: PhantomData,
+    }
+}
+
+/*
 /// Handle the last effect in a computation using an async handler.
 ///
 /// For handling multiple effects asynchronously, see [`handle_group_async`]. For details on
@@ -603,3 +756,4 @@ where
 {
     transform(g, handler)
 }
+*/

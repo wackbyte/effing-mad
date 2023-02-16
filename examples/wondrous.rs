@@ -1,26 +1,40 @@
 #![feature(generator_trait, generators, never_type)]
 
 use {
-    effing_mad::{effectful, handle_group, handler, perform, run, Effect},
+    effing_mad::{data::Union, GeneratorToEffectful, Effectful, effectful, handle_group, handler, perform, run, Effect},
     std::ops::ControlFlow,
 };
 
-struct Cancel;
+struct Number(usize);
 
-impl Effect for Cancel {
-    type Injection = !;
+impl Effect for Number {
+    type Injection = ();
 }
 
-#[effectful(Cancel)]
-fn cancel() {
-    perform!(Cancel);
+fn generator_fn() -> impl Effectful<Effects = Union!(Number), Output = ()> {
+    GeneratorToEffectful::new(Box::pin(static |_begin| {
+        let foo = String::from("foo");
+        let foo_ref = &foo;
+        perform!(Number(0));
+        println!("{foo_ref}");
+        perform!(Number(foo.len()));
+    }))
+}
+
+#[effectful(Number)]
+fn sussy() {
+    let foo = String::from("foo");
+    let foo_ref = &foo;
+    perform!(Number(0));
+    println!("{foo_ref}");
+    perform!(Number(foo.len()));
 }
 
 fn main() {
     let handled = handle_group(
-        cancel(),
+        generator_fn(),
         handler! {
-            Cancel: Cancel => return ControlFlow::Break(()),
+            Number(_): Number => (),
         },
     );
     run(handled);

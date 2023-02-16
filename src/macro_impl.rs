@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        data::{union, Union, Void},
+        data::{union::Uninject, Union, Void},
         injection::{EffectList, Tagged},
         Effect, EffectGroup,
     },
@@ -20,12 +20,9 @@ pub macro lift($effectful:expr $(,)?) {{
     let mut effectful = $crate::IntoEffectful::into_effectful($effectful);
     let mut injections = $crate::data::Union::inject($crate::injection::Begin);
     loop {
-        let state = {
-            let pin = unsafe { ::core::pin::Pin::new_unchecked(&mut effectful) };
-            $crate::Effectful::resume(pin, injections)
-        };
-        match state {
-            $crate::EffectfulState::Perform(effects) => {
+        match $crate::Effectful::resume(effectful, injections) {
+            $crate::EffectfulState::Perform(effects, new_effectful) => {
+                effectful = new_effectful;
                 injections = $crate::data::union::Subset::subset(
                     yield $crate::data::union::Superset::superset(effects),
                 )
@@ -55,7 +52,7 @@ pub fn uninject_with_marker<E, Is, Index>(
 ) -> Option<E::Injection>
 where
     E: Effect,
-    Is: union::Uninject<Tagged<E::Injection, E>, Index>,
+    Is: Uninject<Tagged<E::Injection, E>, Index>,
 {
     injections.uninject().ok().map(Tagged::untag)
 }

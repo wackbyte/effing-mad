@@ -51,26 +51,28 @@ impl<T> EffectGroup for State<T> {
 type StateEffects<T> = <State<T> as EffectGroup>::Effects;
 type StateInjections<T> = <StateEffects<T> as EffectList>::Injections;
 
-pub const fn get<T>() -> Get<T> {
-    Get(PhantomData)
-}
+impl<T> State<T> {
+    pub const fn get() -> Get<T> {
+        Get(PhantomData)
+    }
 
-pub const fn set<T>(value: T) -> Set<T> {
-    Set(value)
-}
+    pub const fn set(value: T) -> Set<T> {
+        Set(value)
+    }
 
-pub fn with<T>(f: impl FnOnce(T) -> T) -> impl Effectful<Effects = StateEffects<T>> {
-    GeneratorToEffectful::new(move |_begin: StateInjections<T>| {
-        let state = perform!(get());
-        let state = f(state);
-        perform!(set(state));
-    })
-}
+    pub fn with(f: impl FnOnce(T) -> T) -> impl Effectful<Effects = StateEffects<T>> {
+        GeneratorToEffectful::new(move |_begin: StateInjections<T>| {
+            let state = perform!(Self::get());
+            let state = f(state);
+            perform!(Self::set(state));
+        })
+    }
 
-pub fn with_mut<T>(f: impl FnOnce(&mut T)) -> impl Effectful<Effects = StateEffects<T>> {
-    GeneratorToEffectful::new(move |_begin: StateInjections<T>| {
-        let mut state = perform!(get());
-        f(&mut state);
-        perform!(set(state));
-    })
+    pub fn with_mut(f: impl FnOnce(&mut T)) -> impl Effectful<Effects = StateEffects<T>> {
+        GeneratorToEffectful::new(move |_begin: StateInjections<T>| {
+            let mut state = perform!(Self::get());
+            f(&mut state);
+            perform!(Self::set(state));
+        })
+    }
 }

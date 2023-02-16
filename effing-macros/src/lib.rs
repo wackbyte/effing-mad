@@ -79,16 +79,22 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Default => quote!(()),
         ReturnType::Type(_r_arrow, ref ty) => ty.to_token_stream(),
     };
+
+    let mut copyable = false;
     let mut cloneable = false;
     attrs.retain(|attr| {
-        if attr.path == parse_quote!(effectful::cloneable) {
-            cloneable = true;
+        if attr.path == parse_quote!(effectful::copyable) {
+            copyable = true;
             false // remove it from the attrs list so no one gets confused
+        } else if attr.path == parse_quote!(effectful::cloneable) {
+            cloneable = true;
+            false
         } else {
             true
         }
     });
-    let clone_bound = cloneable.then_some(quote!( + ::core::clone::Clone + ::core::marker::Unpin));
+    let copy_bound = copyable.then_some(quote!(+ ::core::marker::Copy));
+    let clone_bound = cloneable.then_some(quote!(+ ::core::clone::Clone));
     quote! {
         #(#attrs)*
         #vis #constness #unsafety
@@ -96,7 +102,7 @@ pub fn effectful(args: TokenStream, item: TokenStream) -> TokenStream {
         -> impl ::effing_mad::Effectful<
             Effects = #effects_type,
             Output = #output_type
-        > #clone_bound {
+        > #copy_bound #clone_bound {
             ::effing_mad::GeneratorToEffectful::new(
                 move |_begin: <#effects_type as ::effing_mad::injection::EffectList>::Injections| {
                     #block

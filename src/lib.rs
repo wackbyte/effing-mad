@@ -404,15 +404,7 @@ where
 }
 */
 
-pub struct HandleGroup<
-    G,
-    H,
-    HandledEs,
-    PostEs,
-    EffectIndices,
-    InjectionIndices,
-    SupersetIndices,
-> {
+pub struct HandleGroup<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices> {
     g: G,
     h: H,
     marker: PhantomData<*mut (
@@ -424,17 +416,8 @@ pub struct HandleGroup<
     )>,
 }
 
-impl<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices>
-    Effectful
-    for HandleGroup<
-        G,
-        H,
-        HandledEs,
-        PostEs,
-        EffectIndices,
-        InjectionIndices,
-        SupersetIndices,
-    >
+impl<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices> Effectful
+    for HandleGroup<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices>
 where
     G: Effectful,
     H: FnMut(HandledEs) -> ControlFlow<G::Output, <HandledEs as EffectList>::Injections>,
@@ -477,26 +460,10 @@ where
     }
 }
 
-pub fn handle_group<
-    G,
-    H,
-    HandledEs,
-    PostEs,
-    EffectIndices,
-    InjectionIndices,
-    SupersetIndices,
->(
+pub fn handle_group<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices>(
     g: G,
     h: H,
-) -> HandleGroup<
-    G,
-    H,
-    HandledEs,
-    PostEs,
-    EffectIndices,
-    InjectionIndices,
-    SupersetIndices,
-> {
+) -> HandleGroup<G, H, HandledEs, PostEs, EffectIndices, InjectionIndices, SupersetIndices> {
     HandleGroup {
         g,
         h,
@@ -504,7 +471,6 @@ pub fn handle_group<
     }
 }
 
-/*
 /// Handle the last effect in a computation using an async handler.
 ///
 /// For handling multiple effects asynchronously, see [`handle_group_async`]. For details on
@@ -514,7 +480,7 @@ pub fn handle_group<
 /// because it is impossible to construct a computation that is both asynchronous and effectful.
 ///
 /// For more flexible interactions with Futures, see [`effects::future`].
-pub async fn handle_async<G, E, Fut>(mut g: G, mut handler: impl FnMut(E) -> Fut) -> G::Output
+pub async fn handle_async<G, E, Fut>(mut g: G, mut h: impl FnMut(E) -> Fut) -> G::Output
 where
     G: Effectful<Effects = Union!(E)>,
     E: Effect,
@@ -522,18 +488,16 @@ where
 {
     let mut injections = Union::inject(Begin);
     loop {
-        // safety: see handle_group() - remember that futures are pinned in the same way as
-        // generators
-        let pin = unsafe { Pin::new_unchecked(&mut g) };
-        match pin.resume(injections) {
-            EffectfulState::Perform(effects) => {
+        match g.resume(injections) {
+            EffectfulState::Perform(effects, new_g) => {
                 let effect = match effects {
                     Union::Inl(effect) => effect,
                     Union::Inr(never) => match never {},
                 };
-                match handler(effect).await {
+                match h(effect).await {
                     ControlFlow::Continue(new_injections) => {
-                        injections = Union::Inl(Tagged::new(new_injections))
+                        g = new_g;
+                        injections = Union::Inl(Tagged::new(new_injections));
                     },
                     ControlFlow::Break(output) => return output,
                 }
@@ -552,31 +516,30 @@ where
 /// because it is impossible to construct a computation that is both asynchronous and effectful.
 ///
 /// For more flexible interactions with Futures, see [`effects::future`].
-pub async fn handle_group_async<G, Es, Fut, BeginIndex>(
+pub async fn handle_group_async<G, Fut, BeginIndex>(
     mut g: G,
-    mut handler: impl FnMut(Es) -> Fut,
+    mut h: impl FnMut(Es) -> Fut,
 ) -> G::Output
 where
-    G: Effectful<Effects = Es>,
-    Es: EffectList,
-    Es::Injections: Inject<Begin, BeginIndex>,
-    Fut: Future<Output = ControlFlow<G::Output, Es::Injections>>,
+    G: Effectful,
+    <G::Effects as EffectList>::Injections: Inject<Begin, BeginIndex>,
+    Fut: Future<Output = ControlFlow<G::Output, <G::Effects as EffectList>::Injections>>,
 {
     let mut injections = Es::Injections::inject(Begin);
     loop {
-        // safety: see handle_group() - remember that futures are pinned in the same way as
-        // generators
-        let pin = unsafe { Pin::new_unchecked(&mut g) };
-        match pin.resume(injections) {
-            EffectfulState::Perform(effects) => match handler(effects).await {
-                ControlFlow::Continue(new_injections) => injections = new_injections,
+        match g.resume(injections) {
+            EffectfulState::Perform(effects, new_g) => match h(effects).await {
+                ControlFlow::Continue(new_injections) => {
+                    g = new_g;
+                    injections = new_injections;
+                },
                 ControlFlow::Break(output) => return output,
             },
             EffectfulState::Return(output) => return output,
         }
     }
 }
-
+/*
 /// Handle one effect in the computation `g` by running other effects.
 ///
 /// It is not possible to get rustc to infer the type of `PostEs`, so calling this function almost
@@ -584,12 +547,11 @@ where
 /// For this reason, prefer to use [`transform0`] or [`transform1`] instead, which should not
 /// require annotation.
 pub fn transform<
-    R,
+    G,
+    F,
     H,
-    E,
-    PreEs,
-    PreHandleEs,
-    HandlerEs,
+    HandledE,
+    UnhandledEs,
     PostEs,
     EffectIndex,
     BeginIndex1,
@@ -602,25 +564,34 @@ pub fn transform<
     SupersetIndices2,
     SupersetIndices3,
 >(
-    mut g: impl Effectful<Effects = PreEs, Output = R>,
-    mut handler: impl FnMut(E) -> H,
-) -> impl Effectful<Effects = PostEs, Output = R>
+    mut g: G,
+    mut handler: F,
+) -> ()
 where
-    H: Effectful<Effects = HandlerEs, Output = E::Injection>,
-    E: Effect,
-    PreEs: EffectList + Uninject<E, EffectIndex, Remainder = PreHandleEs>,
-    PreHandleEs: EffectList + Superset<PostEs, SupersetIndices1>,
-    HandlerEs: EffectList + Superset<PostEs, SupersetIndices2>,
+    G: Effectful,
+    F: FnMut(HandledE) -> H,
+    H: Effectful<Output = HandledE::Injection>,
+    HandledE: Effect,
+    G::Effects: Uninject<HandledE, EffectIndex, Remainder = UnhandledEs>,
+    UnhandledEs: EffectList + Superset<PostEs, SupersetIndices1>,
+    H::Effects: Superset<PostEs, SupersetIndices2>,
     PostEs: EffectList,
-    PreEs::Injections: Inject<Begin, BeginIndex1>
-        + Uninject<Tagged<E::Injection, E>, InjectionIndex, Remainder = PreHandleEs::Injections>,
-    PreHandleEs::Injections: Superset<PreEs::Injections, SupersetIndices3>,
-    HandlerEs::Injections: Inject<Begin, BeginIndex2>,
+    <G::Effects as EffectList>::Injections: Inject<Begin, BeginIndex1>
+        + Uninject<
+            Tagged<HandledE::Injection, HandledE>,
+            InjectionIndex,
+            Remainder = UnhandledEs::Injections,
+        >,
+    UnhandledEs::Injections: Superset<<G::Effects as EffectList>::Injections, SupersetIndices3>,
+    <H::Effects as EffectList>::Injections: Inject<Begin, BeginIndex2>,
     PostEs::Injections: Inject<Begin, BeginIndex3>
         + Subset<
-            <PreEs::Injections as Uninject<Tagged<E::Injection, E>, InjectionIndex>>::Remainder,
+            <<G::Effects as EffectList>::Injections as Uninject<
+                Tagged<HandledE::Injection, HandledE>,
+                InjectionIndex,
+            >>::Remainder,
             SubsetIndices1,
-        > + Subset<HandlerEs::Injections, SubsetIndices2>,
+        > + Subset<<H::Effects as EffectList>::Injections, SubsetIndices2>,
 {
     GeneratorToEffectful::new(move |_begin: PostEs::Injections| {
         let mut injections = PreEs::Injections::inject(Begin);
@@ -652,7 +623,7 @@ where
                     },
                     // any other effect
                     Err(effects) => {
-                        injections = PreHandleEs::Injections::superset(
+                        injections = UnhandledEs::Injections::superset(
                             PostEs::Injections::subset(yield effects.superset())
                                 .ok()
                                 .unwrap(),
@@ -664,7 +635,156 @@ where
         }
     })
 }
+*/
 
+pub struct Transform<
+    G,
+    F,
+    H,
+    HandledE,
+    UnhandledEs,
+    PostEs,
+    EffectIndex,
+    BeginIndex1,
+    BeginIndex2,
+    BeginIndex3,
+    InjectionIndex,
+    SubsetIndices1,
+    SubsetIndices2,
+    SupersetIndices1,
+    SupersetIndices2,
+    SupersetIndices3,
+> {
+    g: G,
+    f: F,
+    marker: PhantomData<*mut (
+        H,
+        HandledE,
+        UnhandledEs,
+        PostEs,
+        EffectIndex,
+        BeginIndex1,
+        BeginIndex2,
+        BeginIndex3,
+        InjectionIndex,
+        SubsetIndices1,
+        SubsetIndices2,
+        SupersetIndices1,
+        SupersetIndices2,
+        SupersetIndices3,
+    )>,
+}
+
+impl<
+        G,
+        F,
+        H,
+        HandledE,
+        UnhandledEs,
+        PostEs,
+        EffectIndex,
+        BeginIndex1,
+        BeginIndex2,
+        BeginIndex3,
+        InjectionIndex,
+        SubsetIndices1,
+        SubsetIndices2,
+        SupersetIndices1,
+        SupersetIndices2,
+        SupersetIndices3,
+    > Effectful
+    for Transform<
+        G,
+        F,
+        H,
+        HandledE,
+        UnhandledEs,
+        PostEs,
+        EffectIndex,
+        BeginIndex1,
+        BeginIndex2,
+        BeginIndex3,
+        InjectionIndex,
+        SubsetIndices1,
+        SubsetIndices2,
+        SupersetIndices1,
+        SupersetIndices2,
+        SupersetIndices3,
+    >
+where
+    G: Effectful,
+    F: FnMut(HandledE) -> H,
+    H: Effectful<Output = HandledE::Injection>,
+    HandledE: Effect,
+    G::Effects: Uninject<HandledE, EffectIndex, Remainder = UnhandledEs>,
+    UnhandledEs: EffectList + Superset<PostEs, SupersetIndices1>,
+    H::Effects: Superset<PostEs, SupersetIndices2>,
+    PostEs: EffectList,
+    <G::Effects as EffectList>::Injections: Inject<Begin, BeginIndex1>
+        + Uninject<
+            Tagged<HandledE::Injection, HandledE>,
+            InjectionIndex,
+            Remainder = UnhandledEs::Injections,
+        >,
+    UnhandledEs::Injections: Superset<<G::Effects as EffectList>::Injections, SupersetIndices3>,
+    <H::Effects as EffectList>::Injections: Inject<Begin, BeginIndex2>,
+    PostEs::Injections: Inject<Begin, BeginIndex3>
+        + Subset<
+            <<G::Effects as EffectList>::Injections as Uninject<
+                Tagged<HandledE::Injection, HandledE>,
+                InjectionIndex,
+            >>::Remainder,
+            SubsetIndices1,
+        > + Subset<<H::Effects as EffectList>::Injections, SubsetIndices2>,
+{
+    type Effects = PostEs;
+    type Output = G::Output;
+
+    fn resume(self, injections: <Self::Effects as EffectList>::Injections) -> EffectfulState<Self> {
+        let Self { mut g, mut f, .. } = self;
+        let mut injections = injections.superset();
+        loop {
+            match g.resume(injections) {
+                EffectfulState::Perform(effects, new_g) => match effects.uninject() {
+                    // the effect we are handling
+                    Ok(effect) => {
+                        let mut handler = f(effect);
+                        let mut handler_injections = HandlerEs::Injections::inject(Begin);
+                        'handler: loop {
+                            match handler.resume(handler_injections) {
+                                EffectfulState::Perform(effects, new_handler) => {
+                                    handler = new_handler;
+                                    handler_injections =
+                                        PostEs::Injections::subset(yield effects.superset())
+                                            .ok()
+                                            .unwrap();
+                                },
+                                EffectfulState::Return(injection) => {
+                                    injections = PreEs::Injections::inject(Tagged::new(inj));
+                                    break 'handler;
+                                },
+                            }
+                        }
+                    },
+                    // any other effect
+                    Err(effects) => {
+                        break EffectfulState::Perform(
+                            effects.superset(),
+                            Self {
+                                g: new_g,
+                                f,
+                                marker: PhantomData,
+                            },
+                        );
+                    },
+                },
+                EffectfulState::Return(output) => break EffectfulState::Return(output),
+            }
+        }
+    }
+}
+
+/*
 /// Handle one effect of `g` by running other effects that it already uses.
 ///
 /// This function is a special case of [`transform`] for when the handler does not introduce any

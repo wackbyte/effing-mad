@@ -1,7 +1,10 @@
 #![feature(generator_trait, generators, never_type)]
 
 use {
-    effing_mad::{data::Union, GeneratorToEffectful, Effectful, effectful, handle_group, handler, perform, run, Effect},
+    effing_mad::{
+        data::Union, effectful, handle_group, handler, perform, run, Effect, Effectful,
+        GeneratorToEffectful,
+    },
     std::ops::ControlFlow,
 };
 
